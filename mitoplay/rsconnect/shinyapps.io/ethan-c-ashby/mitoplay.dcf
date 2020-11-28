@@ -1,0 +1,13 @@
+name: mitoplay
+title:
+username:
+account: ethan-c-ashby
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 3309406
+bundleId: 3914631
+url: https://ethan-c-ashby.shinyapps.io/mitoplay/
+when: 1606530489.50771
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: app_depreciated.R

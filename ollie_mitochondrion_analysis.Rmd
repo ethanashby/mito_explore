@@ -1,0 +1,433 @@
+---
+title: "Applying Shannon's Index to Human Mitochondion Genome"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+```{r, echo=FALSE, eval=TRUE, message=FALSE, warning=FALSE}
+library(entropy)
+library(stringr)
+library(seqinr)
+library(stringi)
+library(future.apply)
+library(tidyverse)
+library(dygraphs)
+library(reshape)
+library(future)
+library(gggenes)
+
+knitr::opts_chunk$set(echo = FALSE, eval=FALSE)
+```
+
+# Good–Turing frequency estimation
+
+## Prologue
+Suppose you are in bed, at the crack of dawn. A light peaks through a narrow sliver in a window curtain. The elongated light beam, gradually makes its way up the bed sheet until it hits your face. Suddenly, you are caressed by the warm, gentle sun. It is time to wake up. Drowsily, you get up and open unveil the entire window, embracing the sun in it's full glory. You check the time. It is 7:00AM. Two hours earlier than you would've typically woken up, but that's ok. Today is a beautiful day. Today we go bird watching. Going downstairs, you make it to the living room,  where all the equipment is laid out on the coffee table in preparation for today. On the coffee table there are binoculars, a sun hat, and, most importantly, a notebook. After you strap on your boots, sun hat, and binoculars, you finally get to the notebook and read it. In there is a list of bird species along with the number of times you have seen them. The list contains all sorts of birds from American Robins to house sparrows. You have done an excellent job counting the number of birds in your local environment. However, as you reach the last page, there is one bird that still hasn't been counted. You know this bird lives in your area, but finding it is a rare sight. Perplexed by this anomaly, you decide to sit down and calculate the probability of finding this rare bird using the Good-Turing frequency estimation. 
+
+## Good-Turing Frequency Estimation
+The Good-Turning frequency estimation is a statistical method used to estimate the probability of encountering a new object. The method starts with a given a set of distinct objects $X$. If we were bird watching, $X$ would represent the known distinct bird species. Next, we count the frequency of each unique bird species in $X$. Using the known frequencies of each species, we calculate the frequencies of frequencies, $N_r$, where $r=0,1,...$ i.e. frequencies. Moreover, the total number of observed species is $N = \sum rN_r$. For example if we know there are 12 house sparrows, 5 blue jays, 2 finches, 2 hawks, 1 falcon, 1 eagle, and 1 owl then the $N_r$ would be 
+\begin{align*}
+  N_1 &= 3\\
+  N_2 &= 2\\
+  &\vdots\\
+  N_12 &= 1
+\end{align*}
+Now that we have $N_r$ defined we can begin calculating probabilities of seen and unseen species.
+Pr(unseen species) = $N_1/N$. More formally, $N_0 = N_1/N$. However, calculating $N_r$ needs an extra step because in calculating $N_0$ we have used some of the probability mass function($pmf$). As a result, we need to adjust the frequency values for $r \ge 1$. For each $N_r$ where $r \ge 1$, we will consider the subsequent frequencies, $q, t$. Next, we define $Z_r = \frac{N_r}{.5(t-q)}$. $Z_r$ will give us the mathematical luxury to take a simple linear regression. Now we can define a function $S(N_r)$ that will predict the $N_r$ using a  linear regression given by $Z_r$. 
+
+If we want to calculate the probability an observed object, we calculate $N_r=\frac{(r+1)S(N_{r+1})}{N}$. 
+
+Developed by Alan Turing, the Good-Turning technique first served as a tool to decrypt message in World War II. In recent years, the Good-Turning frequency estimation as been used in bioinformatics. 
+
+```{r, eval=TRUE}
+fasta <- read.fasta(file="mitochondrion_sequence.fasta", seqtype="DNA", as.string=TRUE, seqonly=TRUE)
+word_lengths=lapply(fasta, function(item){floor(0.5*log2(str_length(item)))})
+```
+
+```{r, eval=FALSE}
+get_word_len <- function(item){
+  floor(0.5*log2(str_length(item)))
+}
+get_word_wl <- function(wl){
+  floor(0.5*log2(wl))
+}
+```
+
+```{r, eval=FALSE}
+get_shannon_index <- function(subsequence, words){
+  freqs = stri_count_fixed(subsequence, words)
+  shannon_score = entropy(freqs)
+  return(shannon_score)
+}
+```
+
+```{r, eval=FALSE, message=FALSE, echo=FALSE}
+g <- function(sequence, windowlength, words){
+  plan(multisession)
+  scores <- future_lapply(1:nchar(sequence), function(i){
+    addon <- substring(sequence, 1, windowlength)
+    added <- paste(sequence, addon, sep="")
+    subsequence <- substring(added, i, i + windowlength - 1)
+    get_shannon_index(subsequence, words)
+  })
+  return(scores)
+}
+```
+
+```{r, eval=FALSE}
+fasta <- str_remove(fasta, "N") 
+windows <- c(5,10,25,50)
+windows_names <- c("index")
+entropies <- c()
+for(w in windows){
+  counts_for_w <- c()
+  addon <- substring(fasta, 1, w)
+  added <- paste(fasta, addon, sep="")
+  for(i in 1:nchar(fasta)){
+    subsequence <- substring(added, i, i + w - 1)
+    counts <-subsequence %>% str_split("") %>% table()
+    counts_for_w <- c(entropy(counts), counts_for_w)
+  }
+  # print(counts_for_w)
+  entropies <- cbind(counts_for_w, entropies)
+  windows_names <- rbind(windows_names, paste0("w", w))
+}
+
+entropies <- cbind(1:16568, entropies)
+colnames(entropies) <- values
+entropies <- as.data.frame(entropies)
+df <- melt(entropies, id=c("index"))
+# entropies
+colnames(entropies) <- windows_names[,1]
+entropies <- as.data.frame(entropies)
+entropies <- entropies %>% mutate(index = 1:16568)
+library(reshape)
+entropies_df <- melt(entropies, id=c("index"))
+
+entropies %>% ggplot() + geom_smooth(aes(x=index, y=w10)) + 
+  geom_smooth(aes(x=index, y=w50, color=w50)) +
+  geom_smooth(aes(x=index, y=w100, color=w100)) +
+  geom_smooth(aes(x=index, y=w200))
+
+# library(stringr)
+# sample_t <- substring(fasta,1,10) %>% str_split("") %>% table()
+# entropy(sample_t)
+```
+
+
+```{r, eval=FALSE}
+window_bases <- c(16, 64, 256)
+all_window_scores <- future_lapply(window_bases, function(wl){
+  print(wl)
+  l=rep(list(c("A","C","T","G")), get_word_wl(wl))
+  pss=expand.grid(l, stringsAsFactors = FALSE)
+  words=do.call(paste0, pss[,1:get_word_wl(wl)])
+  unlist(g(fasta, wl, words))
+})
+```
+
+```{r, eval=FALSE}
+all_scores <- do.call(cbind, all_window_scores)
+all_scores <- cbind(1:16569, all_scores)
+values <- c("index", "wl16", "wl64", "wl256")
+colnames(all_scores) <- values
+all_scores <- as.data.frame(all_scores)
+df <- melt(all_scores, id=c("index"))
+```
+
+```{r, eval=FALSE}
+library(gggenes)
+
+wl256df <- df %>% filter(variable=="wl256")
+wl64df <- df %>% filter(variable=="wl64")
+wl16df <- df %>% filter(variable=="wl16")
+
+ggplot(anno_1)+geom_gene_arrow(mapping=aes(xmin=Start, xmax=Stop, y=4.9, fill=Feature, label=Feature))+geom_gene_label(mapping=aes(xmin=Start, xmax=Stop, y=4.9, fill=Feature, label=Feature), align = "left") + geom_smooth(data=wl256df, aes(x = index, y = value, color=variable)) +theme(legend.position="none")
+
+ggplot(anno_1)+geom_gene_arrow(mapping=aes(xmin=Start, xmax=Stop, y=3.6, fill=Feature, label=Feature))+geom_gene_label(mapping=aes(xmin=Start, xmax=Stop, y=3.6, fill=Feature, label=Feature), align = "left") + geom_smooth(data=wl64df, aes(x = index, y = value, color=variable)) +theme(legend.position="none")
+
+ggplot(anno_1)+geom_gene_arrow(mapping=aes(xmin=Start, xmax=Stop, y=2.25, fill=Feature, label=Feature))+geom_gene_label(mapping=aes(xmin=Start, xmax=Stop, y=2.25, fill=Feature, label=Feature), align = "left") + geom_smooth(data=wl16df, aes(x = index, y = value, color=variable)) +theme(legend.position="none")
+```
+
+```{r, eval=TRUE}
+library(data.table)
+library(DT)
+anno<-data.table(read.csv("mito_coords.csv", header=FALSE))
+colnames(anno)<-c("Locus", "Start", "Stop", "Feature", "Description", "Ref", "NA")
+anno<-setDT(anno[,2:4])
+anno_1<-anno[Start<Stop, with=TRUE]
+anno_1<-as.data.frame(anno_1)
+for (i in 1:3){
+  anno_1<-rbind(anno_1, c("Start"=as.numeric(anno[Start>Stop, with=TRUE][i,1]), "Stop"=16569, "Feature"=as.character(anno[Start>Stop, with=TRUE][i,3])))
+  anno_1<-rbind(anno_1, c("Start"=0, "Stop"=as.numeric(anno[Start>Stop, with=TRUE][i,2]), "Feature"=as.character(anno[Start>Stop, with=TRUE][i,3])))
+}
+anno_1<-setDT(anno_1[,c(3,1,2)])
+anno_1$Start<-as.numeric(anno_1$Start)
+anno_1$Stop<-as.numeric(anno_1$Stop)
+anno_1 <- anno_1[abs(anno_1$Stop-anno_1$Start)>50,]
+```
+Binning Matters
+```{r, eval=FALSE}
+bin_shannon <- function(sequence, bin_size, words){
+  times <- seq(1, nchar(sequence), bin_size)
+  scores <- future_lapply(times, function(i){
+    addon <- substring(sequence, 1, bin_size)
+    added <- paste(sequence, addon, sep="")
+    subsequence <- substring(added, i, i + bin_size - 1)
+    get_shannon_index(subsequence, words)
+  })
+}
+bin_seq <- seq(16, 100, 5)
+bin_scores <- future_lapply(bin_seq, function(bin_size){
+  print(bin_size)
+  l=rep(list(c("A","C","T","G")), get_word_wl(bin_size))
+  pss=expand.grid(l, stringsAsFactors = FALSE)
+  words=do.call(paste0, pss[,1:get_word_wl(bin_size)])
+  as.data.frame(unlist(g(fasta, bin_size, words)))
+})
+```
+Binning Matters cont
+```{r, eval=FALSE}
+all_bin_scores <- do.call(cbind, bin_scores)
+bin_names <- c()
+for(b in bin_seq){
+  bin_names <- c(bin_names, paste("b", b, sep=""))
+}
+plot(all_bin_scores[1:172,17])
+bin_names <- c(bin_names)
+colnames(all_bin_scores) <- bin_names
+bin_df <- as.data.frame(all_bin_scores)
+bin_df <- melt(bin_df, id=c("index"))
+bin_df %>% filter(variable == "b96") %>% ggplot() + geom_bar(aes(x=index, ))
+```
+
+```{r. eval=FALSE}
+example_genes
+mito_coords
+ggplot(mito_coords, aes(xmin = X2, xmax = X3, y = X5, fill = X1)) +
+  geom_gene_arrow() +
+  facet_wrap(~ X5, scales = "free", ncol = 1) +
+  scale_fill_brewer(palette = "Set3") +
+  theme_genes()
+```
+
+```{r, eval=TRUE, echo=FALSE}
+library(shiny)
+# Define UI for app that draws a histogram ----
+
+ui <- fluidPage(
+  # App title ----
+  titlePanel("Mitochondrion Analysis on Shannon's Entropy"),
+  sidebarPanel(
+    selectizeInput(
+      inputId = "featureChoice", 
+      label = "Select a Feature", 
+      choices = unique(anno_1$Feature), 
+      selected = "CR:HVS2",
+      multiple = TRUE
+    ),
+    verbatimTextOutput("rage"),
+    # checkboxInput("smoothCheckbox", label = "Smooth", value = FALSE),
+    # checkboxInput("boxCheckbox", label = "Box", value = FALSE),
+    textInput("breaks", "Enter window size(s) separated by a comma...", value="10"),
+    actionButton("plotButton", label = "Plot Graphs"),
+    # textOutput("breakresult")
+    # dataTableOutput("data")
+  ),
+  mainPanel(
+    plotOutput(outputId = "plot", width = "100%"),
+  ),
+  verbatimTextOutput("info"),
+  plotOutput(outputId = "genomePlot", 
+             # width = "100%", 
+             dblclick = "plot1_dblclick",
+             click = "plot_click",
+             hover = "plot_hover",
+             brush = brushOpts(
+              id = "plot1_brush",
+              resetOnNew = TRUE)
+  )
+)
+server <- function(input, output) {
+  output$breakresult <- renderPrint({ 
+    # nums <- extract(input$breaks)
+    # nums
+    # print(input$do)
+  })
+  
+  extract <- function(text) {
+    text <- gsub(" ", "", text)
+    split <- strsplit(text, ",", fixed = FALSE)[[1]]
+    as.numeric(split)
+  }
+  
+  get_windowNames <- function(text_w){
+    window_choices <- c("index")
+    for(i in rev(text_w)){
+      # print(paste0("w",i))
+      window_choices <- rbind(paste0("w",i), window_choices)
+    }
+    window_choices[,1]
+  }
+  
+  genomeDataInput <- eventReactive(input$plotButton, {
+    plan(multisession)
+    nums <- extract(input$breaks)
+    entropies <- future_lapply(nums, function(w){
+      addon <- substring(fasta, 1, w)
+      fasta_added <- paste(fasta, addon, sep="")
+      string_chunks <- future_lapply(1:nchar(fasta), function(i){
+        s <- substring(fasta_added, i, i + w - 1) # %>% str_split("") %>% table()
+        c(str_count(s, "A"), str_count(s, "C"), str_count(s, "G"), str_count(s, "T"))
+      })
+      get_entropies <- future_lapply(string_chunks, function(i){
+        entropy(i)
+      })
+      unlist(get_entropies)
+    })
+    entropies <- as.data.frame(do.call(cbind, entropies)) %>% mutate(index=1:16569)
+    colnames(entropies) <- get_windowNames(nums)
+    entropies_df <- reshape::melt(entropies, id=c("index"))
+    plot_var = FALSE
+    entropies_df
+  })
+
+  output$plot <- renderPlot({
+    feature_row <- anno_1 %>% filter(Feature==input$featureChoice)
+    start <- feature_row$Start
+    end <- feature_row$Stop
+    filtered_data <- genomeDataInput() %>% filter(start <= index & index <= end)
+    label_pos <- summary(filtered_data$value)[3]
+    ggplot(anno_1) +
+      geom_gene_arrow(mapping=aes(xmin=start, xmax=end, y=label_pos, fill=Feature, label=Feature)) +
+      geom_gene_label(mapping=aes(xmin=start, xmax=end, y=label_pos, fill=Feature, label=Feature), 
+                      align = "left") + 
+      geom_smooth(data=filtered_data, aes(x = index, y = value, color=variable)) +theme(legend.position="none")
+      # geom_smooth(aes(x=index, y=value, color=variable)) 
+      # coord_cartesian(xlim = ranges$x, ylim = ranges$y, expand = FALSE) + 
+  })
+  
+  ranges <- reactiveValues(x = NULL, y = NULL)
+  
+  output$genomePlot <- renderPlot({
+    # print("plotting!")
+    nums <- extract(input$breaks)
+    print(ranges$x)
+    # genomeDataInput() %>% filter(variable %in% get_windowNames(nums)) %>% 
+    #   ggplot() + geom_smooth(aes(x=index, y=value, color=variable))
+    filtered_data <- genomeDataInput() %>% filter(variable %in% get_windowNames(nums))
+    label_pos <- summary(filtered_data$value)[3]
+    ggplot(anno_1) +
+      geom_gene_arrow(mapping=aes(xmin=Start, xmax=Stop, y=label_pos, fill=Feature, label=Feature)) +
+      geom_gene_label(mapping=aes(xmin=Start, xmax=Stop, y=label_pos, fill=Feature, label=Feature), 
+                      align = "left") + 
+      geom_smooth(data=filtered_data, aes(x = index, y = value, color=variable)) +theme(legend.position="none")+
+      coord_cartesian(xlim = ranges$x, ylim = ranges$y, expand = FALSE)
+  })
+
+  observeEvent(input$plot1_dblclick, {
+  brush <- input$plot1_brush
+    if (!is.null(brush)) {
+      ranges$x <- c(brush$xmin, brush$xmax)
+      ranges$y <- c(brush$ymin, brush$ymax)
+  
+    } else {
+      ranges$x <- NULL
+      ranges$y <- NULL
+    }
+  })
+  
+  output$info <- renderText({
+    xy_str <- function(e) {
+      if(is.null(e)) return("NULL\n")
+      paste0("x=", round(e$x, 1), " y=", round(e$y, 1), "\n")
+    }
+    xy_range_str <- function(e) {
+      if(is.null(e)) return("NULL\n")
+      paste0("xmin=", round(e$xmin, 1), " xmax=", round(e$xmax, 1), 
+             " ymin=", round(e$ymin, 1), " ymax=", round(e$ymax, 1))
+    }
+    paste0(
+      "click: ", xy_str(input$plot_click),
+      "dblclick: ", xy_str(input$plot1_dblclick),
+      "hover: ", xy_str(input$plot_hover),
+      "brush: ", xy_range_str(input$plot1_brush)
+    )
+  })
+}
+
+shinyApp(ui, server)
+```
+
+```{r, echo=FALSE, eval=FALSE}
+windows <- strtoi(input$windowChoice)
+print(windows)
+feature_row <- anno_1 %>% filter(Feature==input$featureChoice)
+start <- feature_row$Start
+end <- feature_row$Stop
+
+window_names <- c("index")
+entropies <- c()
+for(w in seq(10,10,10)){
+  counts_for_w <- c()
+  addon <- substring(fasta, 1, w)
+  fasta_added <- paste(fasta, addon, sep="")
+  for(i in 1:nchar(fasta_added)){
+    subsequence <- substring(fasta_added, i, i + w - 1)
+    counts <- subsequence %>% str_split("") %>% table()
+    counts_for_w <- c(entropy(counts), counts_for_w)
+  }
+  entropies <- cbind(counts_for_w, entropies)
+  window_names <- rbind(window_names, paste0("w",w))
+}
+index <- c(1:300)
+entropies <- cbind(index, entropies)
+colnames(entropies) <- window_names[,1]
+entropies <- as.data.frame(entropies)
+entropies_df <- reshape::melt(entropies, id=c("index"))
+
+entropies_df %>% ggplot() + geom_smooth(aes(x=index,y=value,color=variable))
+head(entropies_df)
+tail(entropies_df)
+
+window_choices <- c()
+for(i in c("10","22","14")){
+  print(paste0("w",i))
+  window_choices <- rbind(paste0("w",i), window_choices)
+}
+window_choices[,1]
+```
+
+```{r, eval=FALSE}
+alphabet <- "ACTGTCAGCTAGCATAGACTACGACTACACTG"
+entropies <- future_lapply(c(4,5), function(w){
+    # counts_for_w <- c()
+    addon <- substring(alphabet, 1, w)
+    fasta_added <- paste(alphabet, addon, sep="")
+    counts_for_w <- future_lapply(1:nchar(alphabet), function(i){
+      substring(fasta_added, i, i + w - 1)
+      entropy(counts)
+    })
+    # window_names <- rbind(window_names, paste0("w",w))
+    unlist(counts_for_w)
+  })
+
+as.data.frame(do.call(cbind, entropies))
+
+string_chunks <- lapply(1:nchar(fasta), function(i){
+  s <- substring(fasta_added, i, i + 10 - 1) # %>% str_split("") %>% table()
+  c(str_count(s, "A"), str_count(s, "C"), str_count(s, "G"), str_count(s, "T"))
+})
+
+get_entropies <- lapply(string_chunks, function(i){
+  entropy(i)
+})
+  
+get_string_chunks <- function(incr){
+  
+}
+
+summary(entropies_df$value)[2]
+```
+

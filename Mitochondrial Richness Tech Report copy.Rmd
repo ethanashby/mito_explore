@@ -1,0 +1,546 @@
+---
+title: "Mining the Visible and Hidden Minigenome of the Cancer Mitochondrion"
+author: "Ethan Ashby and Oliver Chang"
+date: "11/22/2020"
+output:
+  html_document:
+    includes:
+      before_body: header.html
+    toc: yes
+  pdf_document:
+    toc: yes
+bibliography: /Users/ethanashby/Desktop/Mitochondrial Richness Project/ref.bib
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+#####Mt DNA Probability estimation
+library(tidyverse)
+library(data.table)
+library(variantprobs)
+library(magrittr)
+library(reshape)
+library(reshape2)
+library(knitr)
+library(here)
+library(plotly)
+library(shiny)
+library(parallel)
+library(gggenes)
+library(future)
+library(seqinr)
+library(DT)
+library(kableExtra)
+library(rsconnect)
+source("calc_minfo copy.R")
+```
+
+## Highlights
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Page Title</title>
+    <style>
+      /* The . with the boxed represents that it is a class */
+      .boxed {
+        background: lightblue;
+        color: black;
+        border: 3px solid black;
+        margin: 0px auto;
+        width: 912px;
+        padding: 10px;
+        border-radius: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="boxed">
+1. **We characterize the landscape of mitochondrial mutation using Single Nucleotide Variant (SNV) data from in 2177 tumor samples spanning 22 tissues and 36 cancer types.**
+2. **We use a nonparametric method developed in statistical ecology to predict thousands of new mitochondrial mutations (some potentially relevant to carcinogenesis) will emerge from future sequencing efforts. This result highlights the importance of retaining and cataloguing reads mapped to the mitochondrial genome in cancer genome studies.**
+3. **SNV data recapitulates known hotspot mutations. Several mutations show preference for particular cancer types.**
+4. **We apply a nonparametric method from computational linguistics to estimate probabilities of encountering hitherto unseen mutations in different genomic regions. No features showed significant tissue specificity in unseen variant signals. This fact, coupled with the lower frequency of singleton variants than in the nuclear genome, illustrates key differences between the mutational landscape of the mitchondrial and nuclear genomes.**
+5. **We employ a sliding window analysis of the mitochondrial genome's shannon entropy content, and observe regular fluctuations in the sequence entropy. We include an interactive web app illustrating global and feature-specific entropic trends.**
+    </div>
+  </body>
+</html>
+
+## Introduction
+
+<style>
+div.blue {
+        background: lightblue;
+        color: black;
+        border: 3px solid black;
+        margin: 0px auto;
+        width: 912px;
+        padding: 10px;
+        border-radius: 10px;
+      }
+</style>
+<div class = "blue">
+**Summary:** Metabolic reprogramming and cell death evasion are hallmarks of many cancers, implicating the mitochondria in carcinogenesis. Study of mutations to the mitochondria's miniature circular genome have identified cancer-specific mutation patterns that may be relevant to cancer initiation/progression.
+</div>
+<br>
+Mitochondria are the power generators of the cell, wherein a system of proteins embedded in the inner membrane generate the universal energy currency of the cell, ATP. In addition to their canonical role in cell metabolism, they are involved in other myriad processes in inflammation and apoptosis (programmed cell death). Cancer cells are characterized by high energy requirements, unchecked proliferation, and avoidance of cell death controls, so mitochondria are hypothesized to play a central role in the genesis and progression of cancer (@Hertweck2017; @Brandon2006; @Zong2016; @Hanahan2011).
+
+The mitchondrion is believed to have originated from a bacteria, engulfed by a pre-eukaryotic cell around 1 billion years ago. The mitochondrion possesses it's own small genome, about 16.6 kb long, encoding 13 proteins that form the cellular respiration machinery of the organelle. The genome also encodes 22 transfer RNAs and 2 ribosomal RNAs (@Hertweck2017). Mutations to the mitochondrial genome have been associated with many cancer types, although the mechanism of action of many of these mutations is unclear. 
+
+In the nuclear genome, there is remarkable heterogeneity in common and rare variants between genes and across cancer types. Greater than 90% of mutations in The Cancer Genome Atlas (TCGA) are singletons, meaning they appear once across the TCGA sequenced tumors. Previous research used a non-parametric Bayesian methods developed in the fields of ecology and computational linguistics to mine cancer-specific signals from the 'hidden genome' of previously unseen mutations (@Chakraborty2019). This research represented an novel way of examining mutation in human cancer by focusing on the mutations that have yet to be documented.
+
+High depth, multi-sample molecular characterizations of the mitochondrial genome have illustrated a number of parallels between mtDNA and nuclear DNA in relation to their mutational landscapes (@Yuan2020). Mutational hotspots (which have been well documented in the nuclear genome) were observed in the regulatory D loop and the *ND4* gene. *ND5* was the most frequently mutated gene, *ND4* was most frequently mutated in prostate and lung cancers, and *COX1* was most frequently mutated in breast, cervical, and bladder cancers. Yuan et al. identified that truncating mutations were enriched in kidney, colorectal, and thyroid cancers, while copy number variants showed remarkable heterogeneity between cancers. In summary, like the nuclear genome, the mitochondrial genome contains an exotic and rich diversity of mutations between genes and between cancer types.
+
+This project aims to surveill the landscape of single nucleotide variants in the cancer mitochondrial genome, with a special emphasis on applying bayesian nonparametric methods to estimate previously unseen variant signals in the mitochondrial genome. 5% of global cancer diagnoses are of unknown tissue of origin and are associated with poor health outcomes; a systematic, data-driven dive into uncovering the mutational hallmarks of different cancers in the mitochondrial genome could help improve or sophisticate attempts at classifying cancers based on a cancer's mutation profile.
+
+## The Data
+
+<style>
+div.blue {
+        background: lightblue;
+        color: black;
+        border: 3px solid black;
+        margin: 0px auto;
+        width: 912px;
+        padding: 10px;
+        border-radius: 10px;
+      }
+</style>
+<div class = "blue">
+**Summary:** We analyzed SNV data from 2177 tumor samples spanning 22 tissues from The Cancer Mitochondria Atlas. We used a table scraped from MitoMap to map variants to particular genomic features
+</div>
+<br>
+
+```{r echo=FALSE, cache=TRUE}
+mtvars<-data.table(read.table("TCMA-MutationSNV copy.tsv", header=TRUE))
+mtvars$Start<-mtvars$position
+mtvars$Stop<-mtvars$position
+mtvars$SBS<-ifelse(mtvars$ref=="C" & mtvars$var=="A", "C>A (L)", ifelse(mtvars$ref=="C" & mtvars$var=="G", "C>G (L)", ifelse(mtvars$ref=="C" & mtvars$var=="T", "C>T (L)", ifelse(mtvars$ref=="T" & mtvars$var=="A", "T>A (L)", ifelse(mtvars$ref=="T" & mtvars$var=="C", "T>C (L)", ifelse(mtvars$ref=="T" & mtvars$var=="G", "T>G (L)", ifelse(mtvars$ref=="G" & mtvars$var=="T", "C>A (H)", ifelse(mtvars$ref=="G" & mtvars$var=="C", "C>G (H)", ifelse(mtvars$ref=="G" & mtvars$var=="A", "C>T (H)", ifelse(mtvars$ref=="A" & mtvars$var=="T", "T>A (H)", ifelse(mtvars$ref=="A" & mtvars$var=="G", "T>C (H)", ifelse(mtvars$ref=="A" & mtvars$var=="C", "T>G (H)", NA))))))))))))
+
+mtvars$cancer_type<-mtvars$cancer_type<-ifelse(mtvars$cancer_type %in% "Uterus-AdenoCA", "Uterine", ifelse(mtvars$cancer_type %in% "Thy-AdenoCA", "Thyroid", ifelse(mtvars$cancer_type %in% "Stomach-AdenoCA", "Stomach", ifelse(mtvars$cancer_type %in% "Skin-Melanoma", "Skin", ifelse(mtvars$cancer_type %in% "Prost-AdenoCA", "Prostate", ifelse(mtvars$cancer_type %in% c("Panc-AdenoCA", "Panc-Endocrine"), "Pancreas", ifelse(mtvars$cancer_type %in% c("Ovary-AdenoCA"), "Ovary", ifelse(mtvars$cancer_type %in% c("Myeloid-AML", "Myeloid-MPN"), "Myeloid", ifelse(mtvars$cancer_type %in% c("Lymph-CLL", "Lymph-BNHL"), "Lymph", ifelse(mtvars$cancer_type %in% c("Lung-AdenoCA", "Lung-SCC"), "Lung", ifelse(mtvars$cancer_type %in% c("Liver-HCC"), "Liver", ifelse(mtvars$cancer_type %in% c("Kidney-ChRCC", "Kidney-RCC"), "Kidney", ifelse(mtvars$cancer_type %in% c("Head-SCC"), "Head/Neck", ifelse(mtvars$cancer_type %in% c("Eso-AdenoCA"), "Esophagus", ifelse(mtvars$cancer_type %in% c("ColoRect-AdenoCA"), "Colorectal", ifelse(mtvars$cancer_type %in% c("CNS-GBM", "CNS-Oligo", "CNS-Medullo", "CNS-PiloAstro"), "CNS",  ifelse(mtvars$cancer_type %in% c("Cervix-SCC", "Cervix-AdenoCA"), "Cervix", ifelse(mtvars$cancer_type %in% c("Breast-AdenoCA", "Breast-LobularCA", "Breast-DCIS"), "Breast", ifelse(mtvars$cancer_type %in% c("Bone-Osteosarc", "Bone-Epith", "Bone-Benign", "SoftTissue-Leiomyo", "SoftTissue-Liposarc"), "Bone/Soft Tissue", ifelse(mtvars$cancer_type %in% c("Bladder-TCC"), "Bladder", ifelse(mtvars$cancer_type %in% c("Biliary-AdenoCA"), "Biliary", NA)))))))))))))))))))))
+
+mtvars<-mtvars %>% dplyr::group_by(cancer_type) %>% dplyr::mutate(n_tumor=length(unique(sample_id)))
+
+mtvars<-setDT(mtvars)
+
+datatable(mtvars, rownames = FALSE, filter="top", options = list(pageLength = 5, scrollX=T))
+```
+
+There has been limited research on the frequencies of rare variation within the mitochondrial genome across several tissue types. Yuan et al. created The Cancer Mitochondria Atlas (TCMA), an open-access web portal to support research and education surrounding mitochondrial cancer genetics. The portal contains open source somatic variant, copy number, nuclear transfer data, and a coexpression dataset. This project will restrict its focus to analysis of somatic variant mutations. 
+
+The TCMA somatic variant data data contains 7611 instances of somatic variant mutations across 2177 tumor samples spanning 36 primary sites and histologies. The data includes the 'sample_id', which corresponds to the unique identifier for each patient/tumor sample. The 'cancer_type' column denotes the tissue of origin and histology of each cancer. The 'chrom' column is 'MT' indicating all data comes form the mitochondrial genome. 'position' denotes the locus of mutation along the 16.6 kb mitochondrial genome. 'ref' and 'var' denote what the unmutated reference nucleotide is and what the mutated variant nucleotide idenity is. 'var_type' denoets the kind of mutation: noncoding, synonymous, nonsynonymous, etc. We generated a few additional variables, chiefly 'SBS', which denotes the direction of nucleotide change and 'n_tumor', which denotes the number of tumors of that particular cancer_type in the dataset.
+
+```{r, echo=FALSE, cache=TRUE}
+anno<-data.table(read.csv("mito_coords.csv", header=FALSE))
+colnames(anno)<-c("Locus", "Start", "Stop", "Feature", "Description", "Ref", "NA")
+
+datatable(anno[,1:5], rownames = FALSE, filter="top", options = list(pageLength = 5, scrollX=T))
+
+anno<-setDT(anno[,2:4])
+
+anno_1<-anno[Start<Stop, with=TRUE]
+anno_1<-as.data.frame(anno_1)
+
+for (i in 1:3){
+anno_1<-rbind(anno_1, c("Start"=as.numeric(anno[Start>Stop, with=TRUE][i,1]), "Stop"=16569, "Feature"=as.character(anno[Start>Stop, with=TRUE][i,3])))
+anno_1<-rbind(anno_1, c("Start"=0, "Stop"=as.numeric(anno[Start>Stop, with=TRUE][i,2]), "Feature"=as.character(anno[Start>Stop, with=TRUE][i,3])))
+}
+
+anno_1<-setDT(anno_1[,c(3,1,2)])
+anno_1$Start<-as.numeric(anno_1$Start)
+anno_1$Stop<-as.numeric(anno_1$Stop)
+setkey(anno_1, Start, Stop)
+annotated_mt<-foverlaps(mtvars, anno_1, by.y=key(anno_1), type="any", nomatch=0L)
+
+dt<-annotated_mt %>% dplyr::select(Feature, sample_id, cancer_type, i.Start, ref, var, var_type, SBS)
+```
+
+## Methods
+
+<style>
+div.blue {
+        background: lightblue;
+        color: black;
+        border: 3px solid black;
+        margin: 0px auto;
+        width: 912px;
+        padding: 10px;
+        border-radius: 10px;
+      }
+</style>
+<div class = "blue">
+**Summary:** We propose using nonparametric statistical methods developed in the fields of computational linguistics and statistical ecology to mutations in the mitochondrial genome. These methods estimate quantitaties and probabilities of hitherto unseen variants.
+</div>
+<br>
+
+### Smoothed Good-Toulmin Estimation: Counting the Unseen
+```{r ssa-logo, cache=TRUE, fig.align = 'center', echo=FALSE, out.width = "50%", fig.cap = "Alexander Corbet's study of the richness of Malayan butterfly species sparked the development of statistical methods to solve the 'Unseen Species Problem."}
+knitr::include_graphics(here::here("butterfly.jpg"))
+```
+<br>
+
+In the early 1940's, naturalist Alexander Corbet spent two years in Malaya trapping butterflies. At the end of his time in Malaya, Corbet constructed a table of species frequencies, denoting how many species he captured once, twice, etc.
+
+```{r, echo=FALSE, cache=TRUE, results='asis'}
+dat<-data.frame(Frequency=c(1, 2, 3, 4, 5, "..." ,15), Species=c(118, 74, 44, 24, 29, "...", 6))
+kbl(dat) %>% kable_classic(full_width = F, html_font = "Cambria")
+```
+
+When Corbet returned to England, he asked R.A. Fisher to estimate the number of new species he would capture if he spent an additional 2 years trapping butterflies. This problem referred to the column of the table with frequency 0 (the unseen species in the population of Malayan butterflies), of which there was no data available. Fisher provided an elegant and simple answer to Corbet's question, an alternating sum of the species frequencies:
+$$\textrm{# New Species in 2 more years trapping}=118-74+44-24...=75$$
+Good and Toulmin extended Fisher's work using a surprisingly simple formula for estimating the number of novel species one would capture if they conducted a survey of $t$ times the original survey effort. Although estimation was only good for $t<1$. Realizing the limitations of previous estimators, and identified a family of estimators that could provably predict the number of novel species all the way up to $t \propto \log{n}$ (@Orlitsky2016). This family of estimators works by truncating the alternating series at a random location $L$, and then averages over the distribution of $L$. Indeed, the bias of the estimator depends on whether you truncate the series after an addition or subtraction term. Averaging the estimator over various cutoff locations helps control the bias.
+
+I applied the Smoothed Good-Toulmin estimator available through the R package variantprobs, as well as the Chao estimate of the total number of unseen variants based on the training mutation frequencies.
+
+### Smoothed Good-Turing Frequency Estimation: A Gentle Introduction
+
+Suppose, like Alexander Corbet, you are going to go for a butterfly catching expedition. After you strap on your boots, sun hat, and binoculars, you finally grab your notebook, a catalogue of the butterfly species you have encountered on previous expeditions. In your book, there is a list of butterfly species along with the number of times you have caught each species (above).
+
+Where $N_1$ denotes the number of species you caught once, $N_2$ the number of species you caught twice, etc. But, like Corbet, you haven't caught every butterfly in your field guide yet. There are some butterflies that remain unseen in your population. Instead of estimating how many butterfly species were unseen in the population, you are interested in the *probability* that you capture one of these rare butterfly species in your morning expedition. 
+
+If we want to calculate the probability that the next butterfly we catch belongs to $N_r$ (was previously observed $r$ times):  $P(\textrm{Next object seen r times})=\frac{(r+1)(N_{r+1})}{N}$ (@Gale1995). Intuitively, this formula estimates the rate at which seen never items become seen once items, seen once items become seen twice items, etc. This formula makes no assumptions about the underlying probability distribution, but rather relies on the empirical training data.
+
+In the butterfly example, $P(\textrm{Next Butterfly Is an Unseen Species (r=0)})=\frac{(r+1)(N_{r+1})}{N}=\frac{(1)(N_{1})}{\sum_{r=0}^\infty rN_r}=\frac{118}{120+2(74)+...+12(6)}$.
+
+However, the sparseness of $N_r$ estimates for large r often leads to poor performance. In the butterfly scenario, suppose you caught 6 species 15 times, but 0 species 16 times. Thus, $N_{16}=0$ and $P(\textrm{Next Butterfly Is an Species Seen 16 times})=0$. However, this group should be assigned nonzero probability. We resolve this challenge by revising probability estimation formula: $P(\textrm{Next Object seen r times})=\frac{(r+1)S(N_{r+1})}{N}$, where $S(\cdot)$ denotes a smoothing function of the raw $N_r$. The smoothing function $Z_r = \frac{N_r}{.5(t-q)}$ (where $N_q, N_t$ are consecutive subscripts s.t. $N_q, N_r, N_t$ are nonzero) is a simple and effective solution, as a simple linear regression of $Z_r$ vs $r$ on log-log scale allows us to impute smoothed $N_r$ (@Gale1995).
+
+Developed by Alan Turing, the Good-Turning technique first served as a tool to decrypt message in World War II. Tasks in computational linguistics such as spelling correction, sense disambiguation, and translation often employ Good-Turing estimation to determine probabilities of encountering previously unseen words, which consequently improve performance. In recent years, the Good-Turing frequency estimation as been used in bioinformatics. 
+
+### Normalized Mutual Information
+Normalized Mutual Information is an information theoretic measure of the dependence between two random variables. $NMI(X,Y)=\frac{MI(X,Y)}{\sqrt{H(X)*H(Y)}}$, is akin to the Pearson correlation coefficient but able to detect nonlinear relationships. $NMI$ is calculated from the marginal and conditional shannon entropies, and can be considered as the reduction in uncertainty in $X$ achieved by observing $Y$. $NMI$ is defined on the [0,1] scale, and in this project, is used to quantify the tissue-specificity of mutation probabilities.
+
+## Results
+
+<style>
+div.blue {
+        background: lightblue;
+        color: black;
+        border: 3px solid black;
+        margin: 0px auto;
+        width: 912px;
+        padding: 10px;
+        border-radius: 10px;
+      }
+</style>
+<div class = "blue">
+**Summary:** Consistent with previous research, we observe extreme strand bias in mutation signatures, suggesting failure of mitochondrial-specific DNA replication/repair mechanisms may be responsible for mutations. Analysis of mutation burden along the mitochondrial genome show hotspot mutations in the regulatory D loop and *ND4* gene. The regulatory D loop (Start: 16024, End: 576) had the highest mutation rate/locus of any region of the mitochondrial genome. Singleton variants represent the majority of mutations, although a considerably smaller fraction than in the nuclear genome. We estimate future sequencing efforts will yield an estimated thousands to tens of thousands of new variants. Many tissue-specific hotspot mutations were identified, while previously unseen mutation probabilities were found to be non tissue-specific. We also explore regional sequence entropy of the mitochondrial genome. 
+</div>
+<br>
+
+### Consistent Mutation Signatures in Mitochondrial Genome
+
+Plots of mutation signature frequencies illustrate a largely homogenous mutation profile among mitochondrial mutations. In accordance with convention, we've converted each mutation to one of 6 SBS signatures, keeping track of which occured on the light and heavy strands. For example, mutations that are denoted "G>A L" on the light strand are converted to their complemenent on the heavy strand "C>T H". In the figure below, the vast majority of mutations are Guanine to Adenine substitutions (T>C on the heavy strand), which comprise approximately 70.6% of total mutations. The next most common mutation was Thymine to Cytosine subsitutions (T>C on light strand), which comprised 24.3% of all mutations. All other mutations had less than 5% frequency. As noted in (@Yuan2020), these extreme strand-specific mutation biases reflect that malfunction of mitchondria-specific DNA replication or repair mechanisms are the responsible for mutation formation.
+
+```{r, cache=TRUE, echo=FALSE, fig.cap="C>T H variants dominate mitochondrial single nucleotide mutations", fig.height=6.5, fig.width=6.5, cache=TRUE, warning=FALSE, fig.align="center"}
+#SBS pie chart
+div(mtvars %>% dplyr::group_by(SBS) %>% dplyr::mutate(burden=n()) %>% dplyr::mutate(tmbpertumor=burden/n_tumor)%>% plot_ly(labels= ~SBS, values=~tmbpertumor, type="pie") %>% layout(title = 'Proportions of SBS in Mitochondrial Mutations',
+         xaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE),
+         yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE)))
+```
+
+Examination of these mutation patterns across different cancer types reveals heterogeneity in mutation burden between cancer types. Plotted below are the mutation frequnecies per tumor across the 36 different cancer types, faceted by the SBS mutation signature. Panels denoting T>C Heavy and T>C Light clearly have the highest mutational burdens, but there exists clear heterogeneity in the frequencies of these mutation signatures. Liver Hepatocellular Carcinoma (Liver-HCC) has the highest mutation burden per tumor across all cancer types in both signatures.
+
+```{r, cache=TRUE, echo=FALSE, warning=FALSE, fig.cap="G>A variants dominate mitochondrial single nucleotide mutations", fig.height=8, fig.width=8, fig.align="center", cache=TRUE}
+
+#SBS plot
+mtvars %>% dplyr::group_by(cancer_type, SBS) %>% dplyr::mutate(burden=n()) %>% dplyr::mutate(tmbpertumor=burden/n_tumor) %>%  ggplot()+geom_bar(aes(x=cancer_type, y=tmbpertumor, fill=SBS), stat="identity")+facet_wrap(~SBS, ncol=4)+xlab("Cancer Types")+ylab("Mutational Burden per Tumor")+theme_bw()+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.position="none", panel.grid=element_blank())+coord_flip()
+```
+
+
+### Regional heterogeneity in mutations
+
+Examining the mutational landscape of the mitochondria illustrates well-known hotspot mutations that have been documented in the literature. The most common mutation (frequency 60) occurs at the 72 bp along the regulatory D loop. The next most common mutation occurs with frequency 34 along the *ND4* gene. The third most common mutation (with frequency 26) occurs along the *12S* gene.
+
+```{r, fig.width=10, cache=TRUE, echo=FALSE, fig.cap="Unseen variant estimates", fig.align="center", warning=FALSE, message=FALSE}
+p<-mtvars %>% dplyr::group_by(Start, SBS) %>% summarize(count=n(), Start=Start, bool=count>10) %>% unique()
+
+ggplot(anno_1)+geom_gene_arrow(mapping=aes(xmin=Start, xmax=Stop, y=-1, fill=Feature, label=Feature))+geom_gene_label(mapping=aes(xmin=Start, xmax=Stop, y=-1, fill=Feature, label=Feature), align = "left")+geom_segment(p, mapping=aes(x=Start, xend=Start, y=0, yend=count)) + theme_bw() + geom_point(p, mapping=aes(x=Start, y=count, size=ifelse(bool==TRUE, 3, 0.3), alpha=ifelse(bool==TRUE, 1, 0.2)), color="red", fill=alpha("orange", 0.3), shape=21, stroke=2)+geom_text(p, mapping=aes(x=Start, y=count, label=ifelse(bool==TRUE, count,'')), hjust=-1, vjust=0)+theme(legend.position="none")+ylab("Mutation Frequency")+xlab("MT Chrm Coord")
+```
+
+Regional variation in mutation rate and types has been documented in the nuclear genome of human cancer (@Lawrence2013). Visualizing the regional heterogeneity of overall mutation density shows that the average mutation frequency is highest from 15000 to 2000, coindicing with the coordinates of the regulatory D loop (Start:16024 to End:576). There's also a minor peak in mutation density between 2500 and 5000 bp, corresponding to the ND1 gene.
+
+```{r, fig.width=10, cache=TRUE, echo=FALSE, fig.cap="Unseen variant estimates", fig.align="center", warning=FALSE, message=FALSE}
+xtra<-p %>% group_by(Start) %>% summarize("Mutations per Locus"=sum(count)) 
+ggplot(anno_1)+geom_gene_arrow(mapping=aes(xmin=Start, xmax=Stop, y=0, fill=Feature, label=Feature))+geom_gene_label(mapping=aes(xmin=Start, xmax=Stop, y=0, fill=Feature, label=Feature), align = "left")+geom_smooth(xtra, mapping=aes(x=Start, y=`Mutations per Locus`))+theme_bw()+ylab("Mutations per Locus")+xlab("MT Coord")+theme(legend.position="none")
+```
+
+### Hotspot Mutations Associate with a Variety of Cancer Types
+
+We assessed the tissue specificity of hotspot mutations with mutation frequency greater than or equal to 22 in the dataset, i.e. this mutation occurs in greater than 1% of our samples. 43 variants attained this mutation threshold criteria. We calculated the proportion of mutations (scaled by the number of tumors in each cancer type category) that belonged to each cancer type. The cancer type specificity of these mutation probabilities were assessed using normalized mutual information.
+
+The bubbleplot shown below illustrates that different hotspot mutations show preferences for different cancer types. The most tissue specific hotspot variant, C>A at position 307, had an NMI of 0.175, and had highest probabilities in Esophogeal and Liver Cancers. The second most specific mutation, G>A at position 16566 associates with Kidney and Colorectal Cancers. The third most specific G>A at position 70 associates with Bone/Soft Tissue Cancers, Liver, and Kidney Cancers. These results support the idea that hotspot mutations in the mitochondrial genome may be useful in classifying cancer types.
+
+```{r, fig.height=10, fig.width=8, echo=FALSE, cache=TRUE, fig.align="center", warning=FALSE, message=FALSE}
+common_muts<-dt %>% group_by(cancer_type) %>% mutate(n_tumor=length(unique(sample_id)))
+
+common_muts<-common_muts %>% group_by(i.Start, ref, var, Feature, cancer_type) %>% mutate(v_f = length(unique(sample_id)), n_tumor=n_tumor[1])
+
+common_muts$variant<-paste(common_muts$ref, common_muts$var, common_muts$i.Start, sep="")
+
+common_muts<-setDT(common_muts)
+
+common_muts_1<-common_muts %>% dcast.data.table(
+    variant ~ cancer_type,
+    value.var = "v_f",
+    fill = 0
+  )
+
+common_muts_1<-common_muts_1[rowSums(common_muts_1[,2:22])>=22,]
+
+tumor_numbers<-common_muts %>% summarize(n_tumor, cancer_type) %>% distinct()
+tumor_numbers<-tumor_numbers[order(tumor_numbers$cancer_type),]
+
+to_plot<-sweep(as.matrix(common_muts_1[,2:22]), 2, tumor_numbers$n_tumor, `/`)
+to_plot<-to_plot/rowSums(to_plot)
+
+to_plot<-as.data.frame(to_plot)
+
+to_plot$variant<-common_muts_1$variant
+
+rownames(to_plot)<-common_muts_1$variant
+
+cancer_npatient <- dt %>% group_by(cancer_type) %>% summarize(cancer_npatient = length(unique(sample_id))) %>% ungroup()
+probs<-cancer_npatient$cancer_npatient/sum(cancer_npatient$cancer_npatient)
+cancer_prob <- probs %>%
+  setNames(cancer_npatient$cancer_type)
+
+nmi <- calc_minfo(
+  to_plot[,1:21],
+  cancer_prob,
+  binary_minfo = FALSE,
+  normalize = TRUE
+)
+
+nmi_df<-data.frame("NMI"=nmi, "variant"=names(nmi))
+
+to_plot<-left_join(to_plot, nmi_df, by="variant")
+
+to_plot<-to_plot %>% melt(id.vars=c("variant", "NMI")) %>% arrange(NMI)
+
+to_plot$variant<-factor(to_plot$variant, levels=unique(to_plot$variant))
+
+colnames(to_plot)<-c("variant", "NMI", "Cancer Type", "Mutation Prob")
+
+p<-to_plot %>% ggplot(aes(x=`Cancer Type`, y=variant, size=`Mutation Prob`, color=variant, text=sprintf("NMI:%s<br>", round(NMI, 5))))+geom_point()+theme_bw()+theme(legend.position = "none", axis.text.x=element_text(angle=90))+xlab("")+ylab("")
+ggplotly(p, tooltip=c("x", "y", "size", "variable", "text"))
+```
+
+### Singleton Variants Compose the Preponderance of Mutations in the Mitochondrial Cancer Genome
+
+```{r, cache=TRUE, echo=FALSE, fig.cap="Mitochondrial single nucleotide variants are mostly singleton variants", fig.height=4, fig.width=8, cache=TRUE, fig.align="center", message=FALSE, warning=FALSE}
+
+mt_dat<-mtvars %>% dplyr::group_by(position, SBS) %>% summarize(v_f=n()) %>% as.data.frame()
+colnames(mt_dat)<-c("Start", "SBS", "v_f")
+
+mt_dat %>% ggplot()+geom_histogram(aes(x=v_f), binwidth=1)+theme_bw()+ylab("Count")+xlab("Variant Frequencies (v_f)")+scale_x_continuous(breaks=seq(1:15))+xlim(0,15)+theme(panel.grid = element_blank())+labs(subtitle= element_text(paste("Singleton frequency: ", round(table(mt_dat$v_f)[1]/sum(table(mt_dat$v_f)), 3), "")))
+
+####### add in v_f
+mt_v_f <- dt %>% group_by(cancer_type) %>% mutate(n_tumor=length(unique(sample_id)))
+colnames(mt_v_f)<-c("Feature", "sample_id", "cancer_type", "Start", "ref", "var", "var_type", "SBS", "n_tumor")
+mt_v_f<-left_join(mt_v_f, mt_dat, by=c("SBS", "Start"))
+mt_v_f<-setDT(mt_v_f)
+```
+
+A plot of the frequencies of frequencies indicates that the slight majority of variants (`r round(table(mt_dat$v_f)[1]/sum(table(mt_dat$v_f)), 3)` of total SNV) are singletons, meaning that they are observed only once in the 2173 tumor samples. This proportion is much less with the proportion of singleton variants observed in the nuclear genome, as in The Cancer Genome Atlas, >90% of somatic variants were singletons. This finding reinforces that mutational processes in the mitochondrial genome are different from the nuclear genome. Still, finding ways to extract clinical information from these rare variants is a worthy task.
+
+```{r, cache=TRUE, echo=FALSE, fig.cap="Unseen variant estimates", fig.height=4, fig.align="center"}
+#number unseen species
+estimates<-c(variantprobs::chao_N0(mt_v_f$v_f, m=length(unique(mt_v_f$sample_id))), variantprobs::sgt_Delta(counts=mt_v_f$v_f, m=length(unique(mt_v_f$sample_id)), t=1), variantprobs::sgt_Delta(counts=mt_v_f$v_f, m=length(unique(mt_v_f$sample_id)), t=2), variantprobs::sgt_Delta(counts=mt_v_f$v_f, m=length(unique(mt_v_f$sample_id)), t=10))
+
+estimates_plot<-data.frame("Type"=factor(c("Chao", "SGT t=1", "SGT t=2", "SGT t=10"), levels=c("Chao", "SGT t=1", "SGT t=2", "SGT t=10")), "Estimates"=estimates)
+ggplot(estimates_plot)+geom_bar(aes(x=Type, y=Estimates), stat="identity")+theme_bw()+ylab("Est. Number of Unseen Mutations")+xlab("Estimation Approach")
+```
+
+Plotted above are the Chao estimate of the number of unseen mutations given training mutation frequencies, as well as the smoothed good turing estimates of the number of novel mutations to be discovered if another 2177, 4354, and 21770 future tumor samples are sequenced. These data indicate that there is tremendous value in retaining future mitochondrial genomic reads from human cancer, as we can anticipate discovered thousands of novel single nucleotide genomic mutations which could be useful in understanding carcinogenesis.
+
+### Unseen Variant Probabilities Show Largely Nonsignificant Tissue-Specific Signals
+
+These singleton variant frequencies were broken down by genomic features and cancer type, and used to calculate the Smoothed Good-Turing Probability, corresponding to the probability of encountering one or more previously uncatalogued (novel) variant in a particular gene in a future sequenced tumor. These probabilities were calculated from each tissue type, to assess if any genes encoded unseen variant probabilities with tissue-specific signals. Bubbleplots of the unseen variant probabilities show variability between tissue types, suggestive that they may contain gene and tissue-specific signals.
+
+```{r, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE, fig.height=10, fig.width=8, fig.align="center"}
+mt_v_f<-dt %>% group_by(cancer_type) %>% mutate(n_tumor=length(unique(sample_id)))
+
+mt_v_f<-mt_v_f %>% group_by(i.Start, ref, var, Feature, cancer_type) %>% mutate(v_f = length(unique(sample_id)), n_tumor=n_tumor[1])
+
+mt_v_f<-setDT(mt_v_f)
+
+mtga_newprobs<-mt_v_f[ ,
+       # Calculate Good Turing probabilities of
+       # at least one new variants per gene & cancer type
+       {
+         GT_probs <- goodturing_probs(
+           counts = v_f,
+           m = n_tumor[1]
+         )
+         .(p_atleast_1new_v = GT_probs['atleast_1new'])
+       },
+       by = .(Feature, cancer_type)
+       ] %>%
+  dcast.data.table(
+    Feature ~ cancer_type,
+    value.var = "p_atleast_1new_v",
+    fill = 1 - exp(- 1/(length(unique(mt_v_f$sample_id)) + 1))
+  ) %>%
+  magrittr::set_rownames(.$Feature) %>%
+  .[, Feature := NULL] %>%
+  data.matrix()
+
+d<-mtga_newprobs %>% reshape2::melt()
+colnames(d)<-c("Feature", "Cancer Type", "P(Unseen mutation)")
+q<-ggplot(d)+geom_point(aes(x=`Cancer Type`, y=Feature, size=`P(Unseen mutation)`, color=Feature))+theme_bw()+theme(axis.text.x=element_text(angle=90), legend.position="none")
+ggplotly(q, tooltip=c("x", "y", "size")) 
+```
+
+```{r eval=FALSE, echo=FALSE, cache=TRUE}
+gene_pairs<-expand.grid(unique(mt_v_f$Feature), unique(mt_v_f$Feature))
+gene_pairs<-gene_pairs[gene_pairs$Var1!=gene_pairs$Var2,]
+mt_mvf<-matrix(nrow=0, ncol=10)
+colnames(mt_mvf)<-colnames(mt_v_f)
+for (i in 1:4290){
+mt_tmp<-mt_v_f[Feature %in% c(as.character(gene_pairs[i,]$Var1), as.character(gene_pairs[i,]$Var2)),]
+mt_tmp$Feature<-paste("Mg", i, sep="")
+mt_mvf<-rbind(mt_mvf, mt_tmp)
+}
+
+mtga_newprobs_given_cancer %>% melt() %>% ggplot()+geom_point(aes(x=X2, y=X1, size=value, color=X1))+theme_bw()+theme(axis.text.x=element_text(angle=90), legend.position="none")+ylab("Genomic Feature")+xlab("Primary Site")
+```
+
+```{r eval=FALSE, echo=FALSE, cache=TRUE}
+complex_v_f <- dt %>% group_by(cancer_type) %>% mutate(n_tumor=length(unique(sample_id)))
+
+complex_v_f<- complex_v_f %>% dplyr::filter(Feature %in% c("ND1", "ND2", "ND3", "ND4", "ND4L", "ND5", "ND6", "Cytb", "COI", "COII", "COIII", "ATPase6", "ATPase8"))
+
+complex_v_f$Feature<-ifelse(complex_v_f$Feature %in% c("ND1", "ND2", "ND3", "ND4", "ND4L", "ND5", "ND6"), "Cmplx1", ifelse(complex_v_f$Feature %in% c("Cytb"), "Cmplx3", ifelse(complex_v_f$Feature %in% c("COI", "COII", "COIII"), "Cmplx4", ifelse(complex_v_f$Feature %in% c("ATPase6", "ATPase8"), "Complx5", NA))))
+
+complex_v_f<-complex_v_f %>% group_by(i.Start, ref, var, Feature, cancer_type) %>% mutate(v_f = length(unique(sample_id)), n_tumor = n_tumor[1])
+
+complex_v_f<-complex_v_f %>% ungroup() %>% setDT()
+
+mtga_newprobs_given_cancer<-complex_v_f[ ,
+       # Calculate Good Turing probabilities of
+       # at least one new variants per gene & cancer type
+       {
+         GT_probs <- goodturing_probs(
+           counts = v_f,
+           m = n_tumor[1]
+         )
+         .(p_atleast_1new_v = GT_probs['atleast_1new'])
+       },
+       by = .(Feature, cancer_type)
+       ] %>%
+  dcast.data.table(
+    Feature ~ cancer_type,
+    value.var = "p_atleast_1new_v",
+    fill = 1 - exp(- 1/(length(unique(mt_v_f$sample_id)) + 1))
+  ) %>%
+  magrittr::set_rownames(.$Feature) %>%
+  .[, Feature := NULL] %>%
+  data.matrix()
+
+cancer_npatient <- dt %>% group_by(cancer_type) %>% summarize(cancer_npatient = length(unique(sample_id))) %>% ungroup()
+probs<-cancer_npatient$cancer_npatient/sum(cancer_npatient$cancer_npatient)
+cancer_prob <- probs %>%
+  setNames(cancer_npatient$cancer_type)
+
+nmi <- calc_minfo(
+  mtga_newprobs_given_cancer,
+  cancer_prob,
+  binary_minfo = FALSE,
+  normalize = TRUE
+)
+
+mtga_newprobs_given_cancer %>% melt() %>% ggplot()+geom_point(aes(x=Var2, y=Var1, size=value, color=Var1))+theme_bw()+theme(axis.text.x=element_text(angle=90), legend.position="none")+ylab("Genomic Feature")+xlab("Primary Site")
+
+null<-perm_nmi(complex_v_f)
+nmi
+null
+```
+
+The significance of these unseen mutation probabilities were evaluated using simulation. Normalized mutual information (NMI) is an information-theoretic metric used to capture a general relationship between two random variables (in this case, mutation probability and cancer labels). NMI was used to measure the cancer-type specificity of each gene's unseen variant probabilities. A null distribution of NMIs was computed by permuting the tissue labels of all mutations 1000 times, in effect, erasing any tissue-variant relationship. When compared to the null distribution, the NMI distribution produced by the real variant-tissue allocations was smaller than that of the null, indicating that any tissue specificity was non-tissue specific. 
+
+```{r echo=FALSE, cache=TRUE, eval=TRUE, message=FALSE, warning=FALSE}
+
+set.seed(11)
+#cancer probs will be the same
+cancer_npatient <- dt %>% group_by(cancer_type) %>% summarize(cancer_npatient = length(unique(sample_id))) %>% ungroup()
+probs<-cancer_npatient$cancer_npatient/sum(cancer_npatient$cancer_npatient)
+cancer_prob <- probs %>%
+  setNames(cancer_npatient$cancer_type)
+
+perm_nmi<-function(i){
+perm_v_f<-mt_v_f %>% mutate(cancer_type=sample(cancer_type, replace=FALSE))
+permprobs<-perm_v_f[,
+       # Calculate Good Turing probabilities of
+       # at least one new variants per Feature & cancer type
+       {
+         GT_probs <- goodturing_probs(
+           counts = v_f,
+           m = n_tumor[1]
+         )
+         .(p_atleast_1new_v = GT_probs['atleast_1new'])
+       },
+       by = .(Feature, cancer_type)
+       ] %>%
+  dcast.data.table(
+    Feature ~ cancer_type,
+    value.var = "p_atleast_1new_v",
+    fill = 1 - exp(- 1/(length(unique(perm_v_f$sample_id)) + 1))
+  ) %>%
+  magrittr::set_rownames(.$Feature) %>%
+  .[, Feature := NULL] %>%
+  data.matrix()
+
+nmi <- calc_minfo(
+  permprobs,
+  cancer_prob,
+  binary_minfo = FALSE,
+  normalize = TRUE
+)
+
+data.frame(value=nmi)
+}
+
+null<-suppressWarnings(mclapply(1:1000, perm_nmi, mc.cores=4))
+nulls<-do.call(rbind, null)
+```
+
+```{r echo=FALSE, cache=TRUE, eval=TRUE, message=FALSE, warning=FALSE}
+
+cancer_npatient <- dt %>% dplyr::group_by(cancer_type) %>% dplyr::summarise(cancer_npatient = length(unique(sample_id))) %>% ungroup()
+probs<-cancer_npatient$cancer_npatient/sum(cancer_npatient$cancer_npatient)
+cancer_prob <- probs %>%
+  setNames(cancer_npatient$cancer_type)
+
+nmi <- calc_minfo(
+  mtga_newprobs,
+  cancer_prob,
+  binary_minfo = FALSE,
+  normalize = TRUE
+)
+
+NMI<-data.frame(Feature=names(nmi), NMI=nmi)
+nulls_1<-data.frame(nulls, Feature=rownames(nulls)[1:66])
+
+to_plot<-left_join(nulls_1, NMI, by="Feature")
+colnames(to_plot)<-c("Null", "Feature", "NMI")
+
+to_plot %>% ggplot()+geom_density(aes(x=NMI), fill="blue")+geom_density(aes(x=Null), fill="red")+theme_bw()+geom_vline(aes(xintercept=quantile(Null, 0.95)), color="red", lty=2)
+```
+
+The significance of these unseen mutation probabilities were evaluated using simulation. NMI was used to measure the cancer-type specificity of each gene's unseen variant probabilities. A null distribution of NMIs was computed by permuting the tissue labels of all mutations 1000 times, in effect, erasing any tissue-variant relationship. When compared to the null distribution (red), the NMI distribution (blue) produced by the real variant-tissue allocations was smaller than the 95th quantile of the null distribution, indicating that any tissue specificity was not significant.
+
+### Exploratory Analysis of Sequence Entropies
+We hypothesized that there may exist a link between mutation frequency and sequence entropy. We developed a sliding-window approach, which slides a window of fixed length along the genome and calculates the Shannon entropy value for each window, based on the frequencies of A,C,T,G in the window. We developed a Shiny application to allow for visualization of these entropies. Visualization of the mitchondrial genome appears to show regular fluctuations in Shannon entropy along the genome, suggesting that complex genomic regions may be evenly spaced along the genome. Visual comparison of regional mutation density and sequence entropy plots doesn't demonstrate a clear relationship. Further investigation is warranted.
+
+<iframe src ="https://ethan-c-ashby.shinyapps.io/mitoplay/" height=1000px width=1000px />
+
+
+## Conclusions
+1. We surveilled the landscape of mitochondrial mutation in human cancer using Single Nucleotide Variant (SNV) data from in 2177 tumor samples spanning 22 tissues and 36 cancer types.
+2. We observed regional heterogeneity in mutation across the mitochondrial genome.
+3. We observed tissue specific hotspot mutations in the mitochondrial genome, which may be relevant to diagnosing cancers of unknown primary site.
+4. We used nonparametric methods to estimate the number and probabilities of encountering hitherto unseen variants from the "hidden" genome of mutation.
+5. We employed a sliding window analysis of the mitochondrial genome's shannon entropy content, and observe regular fluctuations in the sequence entropy. We included an shiny app to demonstrate global and feature-specific entropic trends.
+
+## Acknowledgements
+This research was conducted as a final project for Data Mining course at Claremont-McKenna College. Thanks to [Mike Izbicki](https://izbicki.me) for his guidance and edits to this project. 
+
+## References
